@@ -14,11 +14,18 @@ How it works (3 phases):
 |---------|---------|
 | Quick Summary | Key metrics for AI |
 | Nodes | Count, resources, capacity |
+| Node Conditions | MemoryPressure / DiskPressure / PIDPressure per node |
 | Resource Allocation | CPU/memory per node (overcommitment %) |
+| Cluster-wide Resource Totals | Total allocatable CPU and memory |
+| Per-namespace Resource Totals | CPU/memory requests and limits per namespace (capacity planning) |
+| Actual Resource Usage | Live usage via `kubectl top` (requires metrics-server) |
+| Workload Readiness | Deployments, StatefulSets, DaemonSets, Argo Rollouts, Istio |
+| HorizontalPodAutoscalers | Min/max/current replicas, utilization targets, HPAs at max |
 | Pods Without Limits/Requests | Resource governance gaps |
 | Top Memory Consumers | Heavy workloads |
 | Top Pod Restarts | Stability issues |
-| Warning Events | Active problems |
+| Warning Events | Active problems (deduplicated by reason) |
+| Problem Pods | Pending and failed pods |
 | PDBs/LimitRanges/Quotas | Resource policies |
 | Network Policies | Security posture |
 | Node Taints | Scheduling controls |
@@ -52,6 +59,40 @@ kubectl kontext | claude -p 'Analyze this cluster. Prioritize issues by severity
 
 kubectl kontext | claude -p 'Is this cluster over-provisioned? Identify idle or wasted resources and suggest rightsizing.'
 
+# Capacity planning — save report first so Claude and the file use the same snapshot
+kubectl kontext > report.md && cat report.md | claude --model sonnet -p '
+## Capacity Planning Analysis
+### Cluster: <cluster name from report> | <date from report>
+
+---
+
+Produce exactly three sections. Use only data present in the report.
+Do not re-sum tables the report has already totalled — read CLUSTER-WIDE
+RESOURCE TOTALS directly for allocatable figures.
+
+### Node Utilisation
+Table with one row per node from NODE RESOURCE ALLOCATION:
+| Node | CPU Req % | CPU Lim % | Mem Req % | Mem Lim % | Status |
+Status = "BLOCKED" if CPU or Mem req >90% | "BURST-RISK" if any limit >100% | "OK" otherwise.
+
+### Resource Efficiency
+Single table using CLUSTER-WIDE RESOURCE TOTALS (allocatable) and
+PER-NAMESPACE RESOURCE TOTALS (sum requested) and ACTUAL RESOURCE USAGE
+(sum used from node rows):
+| | CPU | Memory |
+| Allocatable | | |
+| Requested | | % of allocatable |
+| Used | | % of allocatable |
+| Req / Used ratio | | |
+
+Then: top 5 namespaces by REQ_CPU from PER-NAMESPACE RESOURCE TOTALS.
+For any namespace visible in kubectl top data, append actual usage and
+flag if REQ > 2x actual.
+
+### Top 3 Actions
+One line each: namespace or node | what to change | cores or GiB freed.
+Rank by capacity impact, not urgency.'
+
 # K3s evaluation
 kubectl kontext | claude --model sonnet -p 'Based on this report, is K8S a suitable alternative for this K3S cluster? Consider: node count, workload complexity, HA requirements.'
 
@@ -76,5 +117,4 @@ Claude gets context before raw data, so relatively concise prompts work well —
 
 
 https://github.com/user-attachments/assets/13ce0c64-e428-42b1-a57f-28a233d771a9
-
 

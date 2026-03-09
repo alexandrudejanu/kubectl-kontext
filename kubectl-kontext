@@ -71,6 +71,7 @@ kubectl top pods -A --no-headers --sort-by=cpu 2>/dev/null > "$TMPDIR/top_pods_c
 kubectl top pods -A --no-headers --sort-by=memory 2>/dev/null > "$TMPDIR/top_pods_mem.txt" &
 kubectl get pods -A --field-selector=status.phase=Pending --no-headers 2>/dev/null > "$TMPDIR/pending.txt" &
 kubectl get pods -A --field-selector=status.phase=Failed --no-headers 2>/dev/null > "$TMPDIR/failed.txt" &
+kubectl get hpa -A -o json 2>/dev/null > "$TMPDIR/hpa.json" || echo '{"items":[]}' > "$TMPDIR/hpa.json" &
 wait
 
 # --- Phase 3: Assemble report in order ---
@@ -120,6 +121,17 @@ jq -r '
     .status.allocatable.cpu,
     .status.allocatable.memory,
     .status.allocatable.pods
+  ]) | @tsv' "$NODES_JSON" | column -t
+echo ""
+
+echo "Node conditions:"
+jq -r '
+  ["NODE","MEMORY_PRESSURE","DISK_PRESSURE","PID_PRESSURE"],
+  (.items[] | [
+    .metadata.name,
+    (.status.conditions[] | select(.type == "MemoryPressure") | .status),
+    (.status.conditions[] | select(.type == "DiskPressure") | .status),
+    (.status.conditions[] | select(.type == "PIDPressure") | .status)
   ]) | @tsv' "$NODES_JSON" | column -t
 echo ""
 
@@ -203,6 +215,40 @@ jq -r '
   "Total Allocatable CPU: \([.items[].status.allocatable.cpu | parse_cpu] | add)m",
   "Total Allocatable Memory: \([.items[].status.allocatable.memory | parse_mem] | add | round)Mi"
 ' "$NODES_JSON" 2>/dev/null || echo "Unable to compute"
+echo ""
+
+# 3c. Per-namespace resource totals (capacity planning)
+echo "## PER-NAMESPACE RESOURCE TOTALS (running pods)"
+jq -r '
+  def parse_cpu:
+    if . == null or . == "" then 0
+    elif test("^[0-9]+m$") then (rtrimstr("m") | tonumber)
+    elif test("^[0-9]+\\.?[0-9]*$") then (tonumber * 1000)
+    else 0 end;
+  def parse_mem:
+    if . == null or . == "" then 0
+    elif test("Ki$") then (rtrimstr("Ki") | tonumber / 1024)
+    elif test("Mi$") then (rtrimstr("Mi") | tonumber)
+    elif test("Gi$") then (rtrimstr("Gi") | tonumber * 1024)
+    elif test("^[0-9]+$") then (tonumber / 1024 / 1024)
+    else 0 end;
+  def fmt_cpu(m): if m >= 1000 then "\(m / 1000 | . * 10 | round / 10)" else "\(m | round)m" end;
+  def fmt_mem(mi): if mi >= 1024 then "\(mi / 1024 | . * 10 | round / 10)Gi" else "\(mi | round)Mi" end;
+  [.items[] | select(.status.phase == "Running")] |
+  group_by(.metadata.namespace) |
+  map({
+    ns: .[0].metadata.namespace,
+    pods: length,
+    req_cpu: (map([.spec.containers[].resources.requests.cpu // "" | tostring | parse_cpu] | add // 0) | add),
+    req_mem: (map([.spec.containers[].resources.requests.memory // "" | tostring | parse_mem] | add // 0) | add),
+    lim_cpu: (map([.spec.containers[].resources.limits.cpu // "" | tostring | parse_cpu] | add // 0) | add),
+    lim_mem: (map([.spec.containers[].resources.limits.memory // "" | tostring | parse_mem] | add // 0) | add)
+  }) |
+  sort_by(-.req_cpu) |
+  (["NAMESPACE","PODS","REQ_CPU","REQ_MEM","LIM_CPU","LIM_MEM"],
+  (.[] | [.ns, .pods, fmt_cpu(.req_cpu), fmt_mem(.req_mem), fmt_cpu(.lim_cpu), fmt_mem(.lim_mem)])) |
+  @tsv
+' "$PODS_JSON" 2>/dev/null | column -t
 echo ""
 
 # 4. Actual Resource Usage (requires metrics-server)
@@ -301,6 +347,36 @@ echo "Istio sidecar injection:"
 ISTIO_COUNT=$(jq '[.items[] | select(.status.phase == "Running") | select(any(.spec.containers[]; .name == "istio-proxy"))] | length' "$PODS_JSON" 2>/dev/null)
 RUNNING_COUNT=$(jq '[.items[] | select(.status.phase == "Running")] | length' "$PODS_JSON" 2>/dev/null)
 echo "- Pods with istio-proxy: $ISTIO_COUNT/$RUNNING_COUNT running pods"
+echo ""
+
+echo "HorizontalPodAutoscalers:"
+HPA_COUNT=$(jq '.items | length' "$TMPDIR/hpa.json" 2>/dev/null || echo 0)
+if [[ "$HPA_COUNT" -gt 0 ]] 2>/dev/null; then
+    jq -r '
+      ["NAMESPACE","NAME","TARGET","MIN","MAX","CURRENT","TARGETS"],
+      (.items[] | [
+        .metadata.namespace,
+        .metadata.name,
+        "\(.spec.scaleTargetRef.kind)/\(.spec.scaleTargetRef.name)",
+        (.spec.minReplicas // 1),
+        .spec.maxReplicas,
+        (.status.currentReplicas // 0),
+        (if .status.currentMetrics then
+          [.status.currentMetrics[] |
+            if .type == "Resource" then
+              "\(.resource.current.averageUtilization // "?")%/\(.resource.target.averageUtilization // "?")%(\(.resource.name))"
+            else .type end
+          ] | join(", ")
+        elif .status.conditions then
+          ([.status.conditions[] | select(.type == "ScalingActive") | .message] | first // "unknown")
+        else "unknown" end)
+      ]) | @tsv
+    ' "$TMPDIR/hpa.json" 2>/dev/null | column -t
+    AT_MAX=$(jq '[.items[] | select(.status.currentReplicas == .spec.maxReplicas)] | length' "$TMPDIR/hpa.json" 2>/dev/null)
+    echo "HPAs at max replicas: $AT_MAX/$HPA_COUNT"
+else
+    echo "None configured"
+fi
 echo ""
 
 # 7. Pods Without Resource Configuration
