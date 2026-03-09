@@ -23,7 +23,7 @@ CLAUDE.md                Claude Code project instructions
 LICENSE
 ```
 
-No subdirectories, no packages, no generated code.
+No src/ packages or modules; runtime logic is a single Bash script with no generated code.
 
 ---
 
