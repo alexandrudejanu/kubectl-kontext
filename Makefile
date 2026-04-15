@@ -24,9 +24,6 @@ go-build:
 	@echo "Add $(pwd)/bin to your PATH"
 	@echo 'export PATH="$$PATH:$(pwd)/bin"'
 
-compare-go:
-	@bash ./scripts/compare-bash-vs-go.sh
-
 install-mcp:
 	@mkdir -p $(HOME)/.local/bin/kubectl-kontext
 	@cp kubectl-kontext $(HOME)/.local/bin/kubectl-kontext/kubectl-kontext

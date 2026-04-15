@@ -6,7 +6,6 @@ dist/
 *.dll
 *.so
 *.dylib
-kubectl-kontext-go
 
 # Go test artifacts
 *.test
