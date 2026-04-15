@@ -104,6 +104,26 @@ kubectl kontext | claude --model haiku -p 'One paragraph: Is this cluster health
 
 ```
 
+## Parallel Go implementation (experimental)
+
+A Go port is now available in parallel to the Bash plugin. The Bash script remains the default release implementation while parity is validated.
+
+```bash
+# Run the Go version directly
+go run ./cmd/kubectl-kontext-go
+
+# Build the Go binary
+make go-build
+./bin/kubectl-kontext-go
+
+# Compare Bash and Go outputs on the same cluster context
+make compare-go
+```
+
+Comparison guidance:
+- Expected/acceptable diffs: whitespace, table alignment, ordering of equal-ranked rows.
+- Investigate diffs: missing section headers, missing resources, count mismatches, or changed fallback behavior.
+
 * Ollama locally (with desire [model](https://ollama.com/library?sort=popular))
 
 ```bash

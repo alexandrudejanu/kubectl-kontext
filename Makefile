@@ -1,7 +1,7 @@
 PLUGIN_NAME=kubectl-kontext
 PLATFORMS=darwin-arm64 linux-arm64
 
-.PHONY: all archives sha release clean remove-index install-mcp
+.PHONY: all archives sha release clean remove-index install-mcp go-build go-run compare-go
 
 all: archives sha
 
@@ -18,6 +18,15 @@ sha:
 
 release: archives sha
 
+go-build:
+	@mkdir -p bin
+	@go build -o bin/kubectl-kontext ./cmd/kubectl-kontext-go
+	@echo "Add $(pwd)/bin to your PATH"
+	@echo 'export PATH="$$PATH:$(pwd)/bin"'
+
+compare-go:
+	@bash ./scripts/compare-bash-vs-go.sh
+
 install-mcp:
 	@mkdir -p $(HOME)/.local/bin/kubectl-kontext
 	@cp kubectl-kontext $(HOME)/.local/bin/kubectl-kontext/kubectl-kontext
@@ -33,3 +42,4 @@ remove-index:
 
 clean:
 	rm -f $(PLUGIN_NAME)-*.tar.gz
+	rm -f bin/kubectl-kontext
