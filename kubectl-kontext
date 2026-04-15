@@ -88,7 +88,8 @@ TOTAL_NODES=$(jq '.items | length' "$NODES_JSON")
 TOTAL_PODS=$(jq '.items | length' "$PODS_JSON")
 PODS_NO_LIMITS=$(jq '[.items[] | select(.status.phase == "Running") | select(any(.spec.containers[]; .resources.limits == null or .resources.limits == {}))] | length' "$PODS_JSON")
 PODS_NO_REQUESTS=$(jq '[.items[] | select(.status.phase == "Running") | select(any(.spec.containers[]; .resources.requests == null or .resources.requests == {}))] | length' "$PODS_JSON")
-WARNING_EVENTS=$(jq '.items | length' "$TMPDIR/events.json" 2>/dev/null)
+# Count unique warning reasons — matches the deduplicated display in RECENT WARNING EVENTS section
+WARNING_EVENTS=$(jq '.items | group_by(.reason) | length' "$TMPDIR/events.json" 2>/dev/null)
 PENDING_PODS=$(wc -l < "$TMPDIR/pending.txt" | tr -d ' ')
 HIGH_RESTART_PODS=$(jq '[.items[] | select(.status.containerStatuses != null) | select([.status.containerStatuses[].restartCount] | add > 10)] | length' "$PODS_JSON")
 
@@ -99,7 +100,7 @@ echo "- Nodes: $TOTAL_NODES"
 echo "- Total Pods: $TOTAL_PODS"
 echo "- Pods without resource limits: $PODS_NO_LIMITS"
 echo "- Pods without resource requests: $PODS_NO_REQUESTS"
-echo "- Warning events: $WARNING_EVENTS"
+echo "- Warning event types (deduplicated): $WARNING_EVENTS"
 echo "- Pending pods: $PENDING_PODS"
 echo "- High restart pods (>10): $HIGH_RESTART_PODS"
 echo ""
@@ -115,8 +116,8 @@ jq -r '
   ["NAME","STATUS","ROLES","VERSION","CPU","MEMORY","PODS_CAPACITY"],
   (.items[] | [
     .metadata.name,
-    (if (.status.conditions[] | select(.type=="Ready") | .status) == "True" then "True" else "False" end),
-    (.metadata.labels["node-role.kubernetes.io/control-plane"] // "<none>"),
+    (if (.status.conditions[] | select(.type=="Ready") | .status) == "True" then "Ready" else "NotReady" end),
+    ([.metadata.labels | to_entries[] | select(.key | startswith("node-role.kubernetes.io/")) | .key | ltrimstr("node-role.kubernetes.io/")] | if length > 0 then join(",") else "<none>" end),
     .status.nodeInfo.kubeletVersion,
     .status.allocatable.cpu,
     .status.allocatable.memory,
@@ -218,6 +219,8 @@ jq -r '
 echo ""
 
 # 3c. Per-namespace resource totals (capacity planning)
+# Namespaces sharing the same 4-part dash-separated prefix (e.g. ns-wallet-services-rundler)
+# are collapsed into one summary row when 3+ share the prefix, to reduce noise for AI context.
 echo "## PER-NAMESPACE RESOURCE TOTALS (running pods)"
 jq -r '
   def parse_cpu:
@@ -234,6 +237,7 @@ jq -r '
     else 0 end;
   def fmt_cpu(m): if m >= 1000 then "\(m / 1000 | . * 10 | round / 10)" else "\(m | round)m" end;
   def fmt_mem(mi): if mi >= 1024 then "\(mi / 1024 | . * 10 | round / 10)Gi" else "\(mi | round)Mi" end;
+  def ns_prefix: split("-") | if length > 4 then .[:4] else . end | join("-");
   [.items[] | select(.status.phase == "Running")] |
   group_by(.metadata.namespace) |
   map({
@@ -244,6 +248,22 @@ jq -r '
     lim_cpu: (map([.spec.containers[].resources.limits.cpu // "" | tostring | parse_cpu] | add // 0) | add),
     lim_mem: (map([.spec.containers[].resources.limits.memory // "" | tostring | parse_mem] | add // 0) | add)
   }) |
+  group_by(.ns | ns_prefix) |
+  map(
+    if length >= 3 then
+      [{
+        ns: "\(.[0].ns | ns_prefix)-*[\(length)ns]",
+        pods: (map(.pods) | add),
+        req_cpu: (map(.req_cpu) | add),
+        req_mem: (map(.req_mem) | add),
+        lim_cpu: (map(.lim_cpu) | add),
+        lim_mem: (map(.lim_mem) | add)
+      }]
+    else
+      .
+    end
+  ) |
+  flatten(1) |
   sort_by(-.req_cpu) |
   (["NAMESPACE","PODS","REQ_CPU","REQ_MEM","LIM_CPU","LIM_MEM"],
   (.[] | [.ns, .pods, fmt_cpu(.req_cpu), fmt_mem(.req_mem), fmt_cpu(.lim_cpu), fmt_mem(.lim_mem)])) |
@@ -380,34 +400,38 @@ fi
 echo ""
 
 # 7. Pods Without Resource Configuration
+# Lists individual pods when count <= 20; groups by namespace above that threshold
+# to keep AI context concise and count consistent with the Quick Summary.
 echo "## PODS WITHOUT RESOURCE LIMITS"
-PODS_LIMITS_OUTPUT=$(jq -r '
-[.items[] |
-select(.status.phase == "Running") |
-select(any(.spec.containers[]; .resources.limits == null or .resources.limits == {})) |
-[.metadata.namespace, .metadata.name] | @tsv] | unique[]' "$PODS_JSON" 2>/dev/null | head -30)
-if [[ -n "$PODS_LIMITS_OUTPUT" ]]; then
-    echo "$PODS_LIMITS_OUTPUT"
-    echo ""
-    echo "Count: $(echo "$PODS_LIMITS_OUTPUT" | wc -l | tr -d ' ')"
-else
-    echo "None"
-fi
+jq -r '
+  [.items[] |
+    select(.status.phase == "Running") |
+    select(any(.spec.containers[]; .resources.limits == null or .resources.limits == {}))] |
+  if length == 0 then "None"
+  elif length <= 20 then
+    "Count: \(length)",
+    (.[] | "\(.metadata.namespace)\t\(.metadata.name)")
+  else
+    "Count: \(length) (grouped by namespace):",
+    (group_by(.metadata.namespace)[] |
+      "\(.[0].metadata.namespace)\t\(length) \(if length == 1 then "pod" else "pods" end)")
+  end' "$PODS_JSON" 2>/dev/null
 echo ""
 
 echo "## PODS WITHOUT RESOURCE REQUESTS"
-PODS_REQUESTS_OUTPUT=$(jq -r '
-[.items[] |
-select(.status.phase == "Running") |
-select(any(.spec.containers[]; .resources.requests == null or .resources.requests == {})) |
-[.metadata.namespace, .metadata.name] | @tsv] | unique[]' "$PODS_JSON" 2>/dev/null | head -30)
-if [[ -n "$PODS_REQUESTS_OUTPUT" ]]; then
-    echo "$PODS_REQUESTS_OUTPUT"
-    echo ""
-    echo "Count: $(echo "$PODS_REQUESTS_OUTPUT" | wc -l | tr -d ' ')"
-else
-    echo "None"
-fi
+jq -r '
+  [.items[] |
+    select(.status.phase == "Running") |
+    select(any(.spec.containers[]; .resources.requests == null or .resources.requests == {}))] |
+  if length == 0 then "None"
+  elif length <= 20 then
+    "Count: \(length)",
+    (.[] | "\(.metadata.namespace)\t\(.metadata.name)")
+  else
+    "Count: \(length) (grouped by namespace):",
+    (group_by(.metadata.namespace)[] |
+      "\(.[0].metadata.namespace)\t\(length) \(if length == 1 then "pod" else "pods" end)")
+  end' "$PODS_JSON" 2>/dev/null
 echo ""
 
 # 8. High Memory Limit Pods (Top 10)
@@ -459,7 +483,10 @@ WARN_OUTPUT=$(jq -r '
     example_message: .[0].message
   }) |
   sort_by(-.total_count) |
-  .[] | "[\(.total_count)x] \(.reason) in \(.ns) (last: \(.last))\n  Objects: \(.objects)\n  Example: \(.example_message[:200])"
+  .[] |
+    # Truncate at last word boundary within 200 chars to avoid mid-word cuts
+    (.example_message | if length <= 200 then . else .[:200] | split(" ") | .[:-1] | join(" ") end) as $msg |
+    "[\(.total_count)x] \(.reason) in \(.ns) (last: \(.last))\n  Objects: \(.objects)\n  Example: \($msg)"
 ' "$TMPDIR/events.json" 2>/dev/null)
 if [[ -n "$WARN_OUTPUT" ]]; then echo "$WARN_OUTPUT"; else echo "None"; fi
 echo ""
