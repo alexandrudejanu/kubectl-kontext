@@ -21,8 +21,8 @@ release: archives sha
 go-build:
 	@mkdir -p bin
 	@go build -o bin/kubectl-kontext ./cmd/kubectl-kontext-go
-	@echo "Add $(pwd)/bin to your PATH"
-	@echo 'export PATH="$$PATH:$(pwd)/bin"'
+	@echo "Add $$(pwd)/bin to your PATH"
+	@echo 'export PATH="$$PATH:$$(pwd)/bin"'
 
 install-mcp:
 	@mkdir -p $(HOME)/.local/bin/kubectl-kontext
