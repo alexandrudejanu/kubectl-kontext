@@ -24,9 +24,9 @@ go-build:
 	@echo "Add $$(pwd)/bin to your PATH"
 	@echo 'export PATH="$$PATH:$$(pwd)/bin"'
 
-install-mcp:
+install-mcp: go-build
 	@mkdir -p $(HOME)/.local/bin/kubectl-kontext
-	@cp kubectl-kontext $(HOME)/.local/bin/kubectl-kontext/kubectl-kontext
+	@cp bin/kubectl-kontext $(HOME)/.local/bin/kubectl-kontext/kubectl-kontext
 	@cp local_mpc_setup/mcp_server.py $(HOME)/.local/bin/kubectl-kontext/mcp_server.py
 	@chmod +x $(HOME)/.local/bin/kubectl-kontext/kubectl-kontext
 	@echo "Installed to $(HOME)/.local/bin/kubectl-kontext/"
