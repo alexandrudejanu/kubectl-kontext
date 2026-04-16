@@ -76,5 +76,22 @@ def get_current_context() -> str:
     return "\n".join(lines)
 
 
+@mcp.tool()
+def switch_context(context_name: str) -> str:
+    """Switch the active kubectl context.
+
+    Use get_current_context first to list available contexts,
+    then call this with the desired context name.
+    """
+    result = subprocess.run(
+        ["kubectl", "config", "use-context", context_name],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return f"Failed to switch context: {result.stderr.strip()}"
+    return result.stdout.strip()
+
+
 if __name__ == "__main__":
     mcp.run()
