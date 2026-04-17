@@ -6,7 +6,7 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Claude Desktop                           │
 │                                                                 │
-│   User prompt ──► Claude LLM ──► tool call decision            │
+│   User prompt ──► Claude LLM ──► tool call decision             │
 │                        ▲                │                       │
 │                        │         MCP client (stdio)             │
 └────────────────────────│────────────────│────────────────────── ┘
