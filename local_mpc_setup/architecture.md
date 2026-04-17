@@ -49,20 +49,20 @@ sequenceDiagram
     participant KK as kubectl-kontext
     participant K8s as Kubernetes API
 
-    User->>CD: "Analyze my cluster"
+    User->>CD: "Analyze cluster"
     CD->>MCP: tool call: get_cluster_report()
     MCP->>KK: subprocess.run()
     par Phase 1
-        KK->>K8s: kubectl get pods -A -o json
-        KK->>K8s: kubectl get nodes -o json
-        KK->>K8s: kubectl get events -A -o json
+        KK->>K8s: kubectl get pods -A -ojson
+        KK->>K8s: kubectl get nodes -ojson
+        KK->>K8s: kubectl get events -A -ojson
     end
     par Phase 2
         KK->>K8s: kubectl get deployments/hpa/rollouts/…
     end
     KK-->>MCP: report (stdout)
     MCP-->>CD: report string
-    CD-->>User: analysis + recommendations
+    CD-->>User: analysis + RECOMMENDATIONS
 ```
 
 ## Process Lifecycle
