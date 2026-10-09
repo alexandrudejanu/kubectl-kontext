@@ -1,66 +1,106 @@
 # Copilot Instructions for `kubectl-kontext`
 
-## Architecture Overview
-- This repository is a **single-script monolith CLI plugin**:
-- Runtime logic lives in `kubectl-kontext` (Bash script).
-- Packaging/release helpers live in `Makefile` and `plugins/kontext.yaml`.
-- The script is structured as a **3-phase pipeline**:
-- Phase 1: fetch heavy cluster JSON once in parallel (`pods`, `nodes`, `events`) and cache to temp files.
-- Phase 2: run independent lightweight `kubectl` calls in parallel and cache outputs.
-- Phase 3: assemble a single ordered markdown report from cached data (plus a small number of direct informational `kubectl` calls).
-- Data processing is shell orchestration + `jq` transforms; there is no internal service boundary, API layer, or multi-package architecture.
+## Repository overview
 
-## Coding Conventions
-- Follow Bash strict mode exactly: `set -euo pipefail`.
-- Use Bash-specific conditionals and defaults already used in the script:
-- `[[ ... ]]` for tests.
-- `${1:-}` style for optional positional args.
-- Quote variable expansions and paths (for example `"$TMPDIR"`, `"$PODS_JSON"`).
-- Keep global/script variables in uppercase snake case (examples: `TMPDIR`, `PODS_JSON`, `NODES_JSON`, `CLUSTER_NAME`).
-- Keep the phased structure explicit with section comments (`Phase 1`, `Phase 2`, `Phase 3`) and markdown section headers in output (`## ...`).
-- Continue the existing performance pattern:
-- expensive `kubectl ... -o json` calls should be cached and reused.
-- independent commands should run in background and synchronize with `wait`.
-- Keep `jq` filters deterministic and null-safe (`//`, `?`, guarded parsing helpers) as done in existing filters.
-- Keep fallback behavior explicit when optional APIs/resources are missing (for example `rollouts`, `hpa`, metrics-server output).
+This repository is not a pure single-script project. It is a hybrid Kubernetes cluster-analysis project with both Bash and Go artifacts in active use:
 
-## Module Boundaries
-- `kubectl-kontext` is the **only runtime module**. New runtime behavior should be implemented there.
-- `Makefile` is for packaging/release tasks (`archives`, `sha`, `clean`) and should not contain runtime report logic.
-- `plugins/kontext.yaml` is Krew distribution metadata only (version, URIs, checksums, platform selectors).
-- `.github/workflows/release-on-tag.yml.disabled` is release automation metadata and is currently disabled.
-- Boundary rules:
-- Do not move report-generation logic into `Makefile`, plugin YAML, or workflow files.
-- Do not add build/release concerns into runtime report sections.
-- Keep data collection and report assembly within the existing 3-phase script flow.
+- `kubectl-kontext` is the shell-based kubectl plugin that gathers cluster data (`kubectl`, `jq`) and emits a markdown assessment report.
+- `cmd/` and `internal/` indicate a Go-based implementation or build path that complements the shell script.
+- `local_mcp_setup/` includes MCP server tooling and Claude integration setup.
+- `plugins/kontext.yaml` contains Krew distribution metadata.
+- `Makefile` handles build, packaging, and MCP installation tasks in addition to release packaging.
 
-## Testing Guidelines
-- Current state in this repo:
-- No unit test framework is present.
-- No integration/e2e test suite is present.
-- No coverage tooling or thresholds are configured.
-- A GitHub Actions workflow exists for release packaging only, and it is disabled.
-- Until automated tests are added, every change should at least pass manual integration checks:
+When making changes, prefer the repository's actual structure over assumptions. The shell script remains the most obvious end-user plugin path, but Go tooling and MCP integration are part of the current codebase.
+
+## Primary code paths
+
+- `kubectl-kontext`: primary shell plugin; contains the cluster assessment logic, caching, and markdown report assembly.
+- `cmd/`: Go entrypoints / CLI build targets.
+- `internal/`: internal Go modules or supporting code for Go-based runtime paths.
+- `Makefile`: packaging, Go build, install, and MCP/Claude setup tasks.
+- `plugins/kontext.yaml`: Krew plugin metadata and platform-specific download definitions.
+- `local_mcp_setup/`: local MCP configuration and example setup scripts for Claude integration.
+
+## Architecture expectations
+
+- Keep the existing reporting flow explicit and sectioned.
+- Preserve the current performance pattern when working in the shell script:
+  - fetch heavy data once and cache it
+  - run independent `kubectl` calls in parallel when possible
+  - assemble final markdown output from cached data
+- Do not assume the codebase is Bash-only; if you add functionality that should also exist in the Go path, implement it in the appropriate Go module instead of silently changing only the shell script.
+- Keep runtime/report logic separated from packaging and distribution metadata. Packaging and plugin metadata belong in `Makefile` and `plugins/kontext.yaml`, not in the report engine.
+
+## Coding conventions
+
+- Follow Bash strict mode exactly in the shell script: `set -euo pipefail`.
+- Use Bash-specific conditionals already present in the project: `[[ ... ]]` and `${1:-}` patterns.
+- Quote paths and variables (`"$TMPDIR"`, `"$PODS_JSON"`, etc.).
+- Keep global script variables upper-case snake case where applicable.
+- Preserve section comments and report headers (for example `## CLUSTER OVERVIEW`, `## WORKLOAD READINESS`, etc.) to keep output stable and readable for AI consumers.
+- Use null-safe `jq` filters when parsing optional data (`//`, `?`, guarded parsing helpers).
+- Preserve explicit fallback handling for optional APIs/resources, such as Rollouts, HPA, metrics-server output, and missing cluster features.
+- Do not add broad, unbounded API calls when cached outputs are sufficient.
+
+## Module boundaries
+
+- `kubectl-kontext` is the user-facing report generator for cluster analysis.
+- `Makefile` is not just release metadata; it also drives Go builds and MCP installation.
+- `plugins/kontext.yaml` is Krew metadata only.
+- `cmd/` and `internal/` are code modules and should not be treated as absent simply because the shell script is prominent.
+- `local_mcp_setup/` supports local MCP integration and should be kept consistent with `Makefile` wiring.
+
+Boundary rules:
+
+- Do not move report-generation logic into packaging or distribution files.
+- Do not add release concerns into the report sections.
+- If a change affects report content, keep the same markdown/output structure and section ordering unless the change is intentional.
+
+## Dependency guidelines
+
+Required runtime dependencies observed in the repo:
+
+- `kubectl`
+- `jq`
+- Go 1.21 for Go-based tooling (`go.mod`)
+
+Optional or integration-specific dependencies observed:
+
+- metrics-server (`kubectl top` output)
+- `claude` CLI for usage examples and MCP setup
+- Python + `uv` for local MCP server execution in `local_mcp_setup/`
+
+Keep runtime behavior compatible with the repo's current tools and ecosystem. Do not introduce new language/framework dependencies unless the repository maintainers intentionally change architecture.
+
+## Testing guidelines
+
+Current repo state:
+
+- There is no clear unit test suite dedicated to the shell script.
+- Go tooling is present, but there is no guarantee a Go test harness is active everywhere.
+- No broad coverage thresholds are configured.
+
+Until automated tests are added or the project establishes a test framework, validate changes with manual checks:
+
 - `./kubectl-kontext --help`
 - `./kubectl-kontext` against a reachable cluster
-- Validate behavior when optional features are unavailable (missing metrics-server, missing Rollouts/HPA APIs).
-- For changes that alter parsing or report content, verify key sections still render and that fallback paths produce valid output instead of crashing.
+- Validate behavior when optional features are missing (metrics-server absent, HPA absent, Rollouts absent)
+- If you alter parsing or output structure, verify the critical sections still render and produce valid output rather than crashing
+- If Go-related code changes are made, run the project-relevant Go build command from `Makefile` when practical
 
-## Anti-Patterns to Avoid
-- Avoid adding new heavy `kubectl get ... -o json` calls in later report assembly when cached data can be reused.
-- Avoid unguarded stderr suppression (`2>/dev/null`) without explicit fallback or user-visible handling; this can hide real failures.
-- Avoid duplicating complex parsing logic (for example repeated CPU/memory parsing snippets) when a shared approach can be reused safely.
-- Avoid making the single script even more tightly coupled by interleaving unrelated concerns; preserve clear sectioning and phase separation.
-- Avoid introducing output wording/heading inconsistencies and typos in generated report text.
+## Anti-patterns to avoid
 
-## Dependency Guidelines
-- Required runtime dependencies (observed):
-- `kubectl`
-- `jq` (hard requirement; script exits if missing)
-- Optional runtime dependencies (observed):
-- metrics-server (`kubectl top` sections)
-- `claude` CLI (usage examples only, not required for script execution)
-- Packaging/distribution constraints from repository files:
-- Krew plugin metadata format in `plugins/kontext.yaml` (`apiVersion: krew.googlecontainertools.github.com/v1alpha2`).
-- Current packaged targets in `Makefile`: `darwin-arm64` and `linux-arm64`.
-- Keep the implementation in Bash + `kubectl` + `jq`; do not add language/framework dependencies unless repository maintainers intentionally change architecture.
+- Avoid adding new expensive `kubectl get ... -o json` calls during final report assembly when cached data is already available.
+- Avoid unguarded stderr suppression without explicit fallback or user-visible handling.
+- Avoid duplicating complex parsing logic when a shared helper or established pattern can be reused safely.
+- Avoid assuming the repo is Bash-only; verify whether a Go path is relevant before editing.
+- Avoid inconsistent output wording or section naming in generated report text.
+- Avoid modifying build/install tooling in ways that drift from the repo's actual toolchain and local MCP setup.
+
+## Preferred workflow for contributions
+
+- Prefer small, targeted edits that respect the current shell-script performance model.
+- When editing cluster report logic, keep the output deterministic and readable.
+- When editing packaging or build workflows, respect the actual build targets present in `Makefile`.
+- When editing MCP or Claude integration, ensure the local setup files and `Makefile` commands remain aligned.
+- Favor repo-native conventions over introducing new abstractions that do not match the current architecture.
